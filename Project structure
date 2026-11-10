@@ -1,0 +1,228 @@
+contact-management-system/
+├── contact_manager.py
+├── test_contact_manager.py
+├── README.md
+└── .gitignore
+
+import re
+import sqlite3
+from pathlib import Path
+
+
+class ContactManager:
+    """Stores and manages contacts in a SQLite database."""
+
+    def __init__(self, database_path=None):
+        self.database_path = Path(database_path or Path(__file__).with_name("contacts.db"))
+        self._create_table()
+
+    def _connect(self):
+        return sqlite3.connect(self.database_path)
+
+    def _create_table(self):
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS contacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    phone TEXT NOT NULL,
+                    email TEXT NOT NULL DEFAULT '',
+                    address TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+
+    @staticmethod
+    def _validate_contact(name, phone, email):
+        if not name.strip():
+            raise ValueError("Name cannot be empty.")
+        if not phone.strip():
+            raise ValueError("Phone number cannot be empty.")
+
+        if email.strip() and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email.strip()):
+            raise ValueError("Enter a valid email address, or leave it blank.")
+
+    def add_contact(self, name, phone, email="", address=""):
+        self._validate_contact(name, phone, email)
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO contacts (name, phone, email, address)
+                VALUES (?, ?, ?, ?)
+                """,
+                (name.strip(), phone.strip(), email.strip(), address.strip()),
+            )
+            return cursor.lastrowid
+
+    def get_all_contacts(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, phone, email, address
+                FROM contacts
+                ORDER BY name COLLATE NOCASE
+                """
+            ).fetchall()
+        return rows
+
+    def search_contacts(self, search_term):
+        term = f"%{search_term.strip()}%"
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, phone, email, address
+                FROM contacts
+                WHERE name LIKE ?
+                   OR phone LIKE ?
+                   OR email LIKE ?
+                   OR address LIKE ?
+                ORDER BY name COLLATE NOCASE
+                """,
+                (term, term, term, term),
+            ).fetchall()
+        return rows
+
+    def update_contact(self, contact_id, name, phone, email="", address=""):
+        self._validate_contact(name, phone, email)
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE contacts
+                SET name = ?, phone = ?, email = ?, address = ?
+                WHERE id = ?
+                """,
+                (
+                    name.strip(),
+                    phone.strip(),
+                    email.strip(),
+                    address.strip(),
+                    contact_id,
+                ),
+            )
+        return cursor.rowcount > 0
+
+    def delete_contact(self, contact_id):
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM contacts WHERE id = ?",
+                (contact_id,),
+            )
+        return cursor.rowcount > 0
+
+
+def print_contacts(contacts):
+    if not contacts:
+        print("\nNo contacts found.")
+        return
+
+    print()
+    for contact_id, name, phone, email, address in contacts:
+        print(f"ID:      {contact_id}")
+        print(f"Name:    {name}")
+        print(f"Phone:   {phone}")
+        print(f"Email:   {email or '—'}")
+        print(f"Address: {address or '—'}")
+        print("-" * 35)
+
+
+def read_contact_details(existing=None):
+    """Ask for contact details. When editing, blank fields keep existing values."""
+    if existing:
+        _, old_name, old_phone, old_email, old_address = existing
+        print("Leave a field blank to keep its current value.")
+        name = input(f"Name [{old_name}]: ").strip() or old_name
+        phone = input(f"Phone [{old_phone}]: ").strip() or old_phone
+        email = input(f"Email [{old_email}]: ").strip() or old_email
+        address = input(f"Address [{old_address}]: ").strip() or old_address
+    else:
+        name = input("Name: ").strip()
+        phone = input("Phone: ").strip()
+        email = input("Email (optional): ").strip()
+        address = input("Address (optional): ").strip()
+
+    return name, phone, email, address
+
+
+def main():
+    manager = ContactManager()
+
+    while True:
+        print(
+            "\n=== Contact Management System ===\n"
+            "1. Add contact\n"
+            "2. View all contacts\n"
+            "3. Search contacts\n"
+            "4. Update contact\n"
+            "5. Delete contact\n"
+            "6. Exit"
+        )
+
+        choice = input("Choose an option (1-6): ").strip()
+
+        try:
+            if choice == "1":
+                details = read_contact_details()
+                contact_id = manager.add_contact(*details)
+                print(f"Contact added successfully. ID: {contact_id}")
+
+            elif choice == "2":
+                print_contacts(manager.get_all_contacts())
+
+            elif choice == "3":
+                term = input("Enter a name, phone, email, or address to search: ")
+                print_contacts(manager.search_contacts(term))
+
+            elif choice == "4":
+                try:
+                    contact_id = int(input("Enter the contact ID to update: "))
+                except ValueError:
+                    print("Please enter a valid numeric ID.")
+                    continue
+
+                contact = next(
+                    (item for item in manager.get_all_contacts() if item[0] == contact_id),
+                    None,
+                )
+                if not contact:
+                    print("Contact not found.")
+                    continue
+
+                details = read_contact_details(contact)
+                if manager.update_contact(contact_id, *details):
+                    print("Contact updated successfully.")
+                else:
+                    print("Contact not found.")
+
+            elif choice == "5":
+                try:
+                    contact_id = int(input("Enter the contact ID to delete: "))
+                except ValueError:
+                    print("Please enter a valid numeric ID.")
+                    continue
+
+                confirm = input("Are you sure you want to delete it? (y/n): ").strip().lower()
+                if confirm == "y":
+                    if manager.delete_contact(contact_id):
+                        print("Contact deleted.")
+                    else:
+                        print("Contact not found.")
+                else:
+                    print("Deletion cancelled.")
+
+            elif choice == "6":
+                print("Goodbye!")
+                break
+
+            else:
+                print("Invalid option. Choose a number from 1 to 6.")
+
+        except ValueError as error:
+            print(f"Error: {error}")
+
+
+if __name__ == "__main__":
+    main()
